@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { spawn } from 'child_process';
 
 export interface OllamaGenerateRequest {
     model: string;
@@ -88,12 +89,67 @@ export class OllamaClient {
             body: JSON.stringify(body),
         });
 
+        if (res.status === 404) {
+            return this.runOllamaCliGenerate(prompt, systemPrompt);
+        }
+
         if (!res.ok) {
             throw new Error(`Ollama error: ${res.statusText}`);
         }
 
         const data = await res.json() as OllamaGenerateResponse;
         return data.response;
+    }
+
+    /**
+     * Run Ollama CLI as a fallback for generation
+     */
+    private async runOllamaCliGenerate(prompt: string, systemPrompt?: string): Promise<string> {
+        const config = this.getConfig();
+        const args = ['run', config.model, '--format', 'json', '--', prompt];
+        return new Promise((resolve, reject) => {
+            const proc = spawn('ollama', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+            let stdout = '';
+            let stderr = '';
+
+            proc.stdout.on('data', (chunk) => stdout += chunk.toString());
+            proc.stderr.on('data', (chunk) => stderr += chunk.toString());
+            proc.on('error', (err) => reject(new Error(`Ollama CLI failed: ${err.message}`)));
+            proc.on('close', (code) => {
+                if (code !== 0) {
+                    reject(new Error(`Ollama CLI exited ${code}: ${stderr.trim()}`));
+                    return;
+                }
+
+                const trimmed = stdout.trim();
+                let jsonText = trimmed;
+
+                // If the CLI prints extra text before JSON, extract the last JSON object.
+                const lastBrace = trimmed.lastIndexOf('}');
+                const firstBrace = trimmed.indexOf('{');
+                if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                    jsonText = trimmed.slice(firstBrace, lastBrace + 1);
+                }
+
+                try {
+                    const parsed = JSON.parse(jsonText);
+                    if (typeof parsed === 'object' && parsed !== null) {
+                        if ('response' in parsed) {
+                            resolve((parsed as any).response);
+                            return;
+                        }
+                        if ('message' in parsed) {
+                            resolve((parsed as any).message);
+                            return;
+                        }
+                    }
+                } catch {
+                    // Ignore parse failures and return raw output.
+                }
+
+                resolve(trimmed);
+            });
+        });
     }
 
     /**
@@ -122,6 +178,12 @@ export class OllamaClient {
             body: JSON.stringify(body),
             signal: abortSignal,
         });
+
+        if (res.status === 404) {
+            const text = await this.runOllamaCliGenerate(prompt, systemPrompt);
+            yield text;
+            return;
+        }
 
         if (!res.ok) {
             throw new Error(`Ollama error: ${res.statusText}`);

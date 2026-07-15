@@ -20,6 +20,13 @@ export class AgentManager {
     }
 
     /**
+     * Check whether Ollama is reachable
+     */
+    async isOllamaRunning(): Promise<boolean> {
+        return this.ollama.isRunning();
+    }
+
+    /**
      * Cancel any currently running agent task
      */
     cancelCurrent(): void {

@@ -60,6 +60,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     private async handleUserMessage(text: string, agentType: AgentType): Promise<void> {
         this.postMessage({ command: 'responseStart', agentType });
+
+        if (!(await this.agentManager.isOllamaRunning())) {
+            this.postMessage({
+                command: 'responseError',
+                error: 'Ollama is not reachable. Start Ollama with `ollama serve` and reload the extension host.',
+            });
+            return;
+        }
+
         try {
             const stream = this.agentManager.runAgentStream(agentType, text);
             for await (const token of stream) {
@@ -68,7 +77,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.postMessage({ command: 'responseEnd' });
         } catch (err: any) {
             const errorMsg = err.message?.includes('fetch')
-                ? 'Cannot connect to Ollama. Make sure it is running (ollama serve).'
+                ? `Cannot connect to Ollama. Make sure it is running (ollama serve). Details: ${err.message}`
                 : 'Error: ' + err.message;
             this.postMessage({ command: 'responseError', error: errorMsg });
         }
